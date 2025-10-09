@@ -1,7 +1,6 @@
 """Auto Area Assign integration."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
@@ -109,6 +108,7 @@ async def _async_assign_areas(hass: HomeAssistant) -> None:
 def _build_alias_map(areas: Iterable[ar.AreaEntry]) -> List[AliasMapping]:
     """Build a list of alias mappings sorted by alias length."""
     mappings: List[AliasMapping] = []
+    seen: set[str] = set()
 
     for area in areas:
         alias_candidates = {area.name, *area.aliases}
@@ -116,6 +116,12 @@ def _build_alias_map(areas: Iterable[ar.AreaEntry]) -> List[AliasMapping]:
             slug = slugify(name)
             if not slug:
                 continue
+            if slug in seen:
+                _LOGGER.debug(
+                    "Skipping duplicate alias slug %s already mapped to an area", slug
+                )
+                continue
+            seen.add(slug)
             mappings.append(AliasMapping(slug=slug, area_id=area.id))
 
     mappings.sort(key=lambda item: len(item.slug), reverse=True)
@@ -149,9 +155,7 @@ def _resolve_object_id(entity: er.RegistryEntry) -> str | None:
 
 async def async_unload_entry(hass: HomeAssistant, entry) -> bool:
     """Handle unloading the integration (placeholder for future config entries)."""
-    tasks = [
-        hass.services.async_remove(domain=DOMAIN, service=SERVICE_REFRESH),
-    ]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if hass.services.has_service(domain=DOMAIN, service=SERVICE_REFRESH):
+        hass.services.async_remove(domain=DOMAIN, service=SERVICE_REFRESH)
     return True
 
