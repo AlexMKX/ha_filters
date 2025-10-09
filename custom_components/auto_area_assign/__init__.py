@@ -60,7 +60,9 @@ async def _async_assign_areas(hass: HomeAssistant) -> None:
     skipped_existing_area = 0
 
     for entity in entity_registry.entities.values():
-        area_id = _match_area_id(alias_map, entity.object_id)
+        # Extract object_id from entity_id (format: domain.object_id)
+        object_id = entity.entity_id.split(".", 1)[1] if "." in entity.entity_id else entity.entity_id
+        area_id = _match_area_id(alias_map, object_id)
         if not area_id:
             continue
 

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  homeassistant:
+    container_name: ha_test
+    image: homeassistant/home-assistant:latest
+    volumes:
+      - ./ha_config:/config
+      - ../custom_components:/config/custom_components
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    environment:
+      - TZ=Europe/Moscow
+
