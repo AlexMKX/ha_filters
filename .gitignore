@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.Python
+.env
+.venv/
+.python-version
+pytest_cache/
+.pytest_cache/
+.homeassistant/
+.DS_Store
