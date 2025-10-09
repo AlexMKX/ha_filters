@@ -1,0 +1,7 @@
+{
+  "name": "Auto Area Assign",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["auto_area_assign"],
+  "country": "global"
+}

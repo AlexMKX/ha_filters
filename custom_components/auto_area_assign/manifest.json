@@ -1,0 +1,12 @@
+{
+  "domain": "auto_area_assign",
+  "name": "Auto Area Assign",
+  "version": "0.1.0",
+  "documentation": "https://github.com/OWNER/ha_filters",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@owner"],
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/OWNER/ha_filters/issues",
+  "homeassistant": "2023.5.0"
+}
