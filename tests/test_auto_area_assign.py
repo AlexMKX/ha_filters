@@ -70,6 +70,11 @@ class AreaEntry:
 class DeviceEntry:
     id: str
     area_id: str | None = None
+    labels: set[str] = None
+    
+    def __post_init__(self):
+        if self.labels is None:
+            self.labels = set()
 
 
 @dataclass
@@ -77,6 +82,12 @@ class EntityEntry:
     entity_id: str
     object_id: str
     device_id: str | None
+    area_id: str | None = None
+    labels: set[str] = None
+    
+    def __post_init__(self):
+        if self.labels is None:
+            self.labels = set()
 
 
 class AreaRegistryStub:
@@ -104,6 +115,12 @@ class DeviceRegistryStub:
 class EntityRegistryStub:
     def __init__(self, entities):
         self.entities = {entity.entity_id: entity for entity in entities}
+        self.updated: list[tuple[str, str]] = []
+    
+    def async_update_entity(self, entity_id: str, *, area_id: str):
+        entity = self.entities[entity_id]
+        entity.area_id = area_id
+        self.updated.append((entity_id, area_id))
 
 
 class HassStub(HomeAssistant):
@@ -157,7 +174,8 @@ def test_does_not_override_existing_area(monkeypatch):
     assert device_reg.updated == []
 
 
-def test_skips_entities_without_device(monkeypatch):
+def test_assigns_area_to_entity_without_device(monkeypatch):
+    """Test that entity without device gets area assigned directly."""
     hass = HassStub()
     area = AreaEntry(id="area-1", name="Hall", aliases=("hall",))
     entity = EntityEntry(
@@ -173,4 +191,6 @@ def test_skips_entities_without_device(monkeypatch):
     run_assignment(hass, area_reg, device_reg, entity_reg, monkeypatch)
 
     assert device_reg.updated == []
+    assert entity.area_id == "area-1"
+    assert entity_reg.updated == [("light.hall_spot", "area-1")]
 

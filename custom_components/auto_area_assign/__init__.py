@@ -13,6 +13,7 @@ from homeassistant.util import slugify
 
 DOMAIN = "auto_area_assign"
 SERVICE_REFRESH = "refresh"
+LABEL_IGNORE = "auto_area_ignore"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -44,7 +45,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def _async_assign_areas(hass: HomeAssistant) -> None:
-    """Assign areas to devices based on entity object_id prefixes."""
+    """Assign areas to devices and entities based on entity object_id prefixes."""
     area_registry = ar.async_get(hass)
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
@@ -55,8 +56,9 @@ async def _async_assign_areas(hass: HomeAssistant) -> None:
         _LOGGER.info("Alias map is empty, nothing to assign")
         return
 
-    assignments = 0
-    skipped_missing_device = 0
+    device_assignments = 0
+    entity_assignments = 0
+    skipped_ignored = 0
     skipped_existing_area = 0
 
     for entity in entity_registry.entities.values():
@@ -66,45 +68,76 @@ async def _async_assign_areas(hass: HomeAssistant) -> None:
         if not area_id:
             continue
 
+        # Check if entity has auto_area_ignore label
+        if LABEL_IGNORE in entity.labels:
+            skipped_ignored += 1
+            _LOGGER.debug(
+                "Entity %s has label %s, skipping", entity.entity_id, LABEL_IGNORE
+            )
+            continue
+
         device_id = entity.device_id
-        if not device_id:
-            skipped_missing_device += 1
-            _LOGGER.debug(
-                "Entity %s matched alias but has no device, skipping", entity.entity_id
-            )
-            continue
+        
+        if device_id:
+            # Entity has a device - assign area to device
+            device = device_registry.async_get(device_id)
+            if device is None:
+                _LOGGER.debug(
+                    "Entity %s references unknown device %s", entity.entity_id, device_id
+                )
+                continue
 
-        device = device_registry.async_get(device_id)
-        if device is None:
-            skipped_missing_device += 1
-            _LOGGER.debug(
-                "Entity %s references unknown device %s", entity.entity_id, device_id
-            )
-            continue
+            # Check if device has auto_area_ignore label
+            if LABEL_IGNORE in device.labels:
+                skipped_ignored += 1
+                _LOGGER.debug(
+                    "Device %s has label %s, skipping", device_id, LABEL_IGNORE
+                )
+                continue
 
-        if device.area_id:
-            skipped_existing_area += 1
-            _LOGGER.debug(
-                "Device %s already assigned to area %s, skipping",
+            if device.area_id:
+                skipped_existing_area += 1
+                _LOGGER.debug(
+                    "Device %s already assigned to area %s, skipping",
+                    device_id,
+                    device.area_id,
+                )
+                continue
+
+            device_registry.async_update_device(device_id, area_id=area_id)
+            device_assignments += 1
+            _LOGGER.info(
+                "Assigned area %s to device %s via entity %s",
+                area_id,
                 device_id,
-                device.area_id,
+                entity.entity_id,
             )
-            continue
+        else:
+            # Entity has no device - assign area to entity itself
+            if entity.area_id:
+                skipped_existing_area += 1
+                _LOGGER.debug(
+                    "Entity %s already assigned to area %s, skipping",
+                    entity.entity_id,
+                    entity.area_id,
+                )
+                continue
 
-        device_registry.async_update_device(device_id, area_id=area_id)
-        assignments += 1
-        _LOGGER.info(
-            "Assigned area %s to device %s via entity %s",
-            area_id,
-            device_id,
-            entity.entity_id,
-        )
+            entity_registry.async_update_entity(entity.entity_id, area_id=area_id)
+            entity_assignments += 1
+            _LOGGER.info(
+                "Assigned area %s to entity %s (no device)",
+                area_id,
+                entity.entity_id,
+            )
 
     _LOGGER.info(
-        "Auto area assignment finished: %s devices updated, %s entities without devices, %s devices already had an area",
-        assignments,
-        skipped_missing_device,
+        "Auto area assignment finished: %s devices updated, %s entities updated, "
+        "%s items with existing area, %s items ignored by label",
+        device_assignments,
+        entity_assignments,
         skipped_existing_area,
+        skipped_ignored,
     )
 
 
