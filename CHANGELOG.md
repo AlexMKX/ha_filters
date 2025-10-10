@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-10-10
+
+### Fixed
+- Added missing `services.yaml` file to fix Home Assistant startup errors
+
+## [0.2.0] - 2025-10-10
+
 ### Added
 - **Area assignment for standalone entities**: The component now automatically assigns areas not only to devices but also to standalone entities (entities without device_id)
 - **Support for auto_area_ignore label**: Added ability to exclude entities and devices from automatic assignment using the `auto_area_ignore` label

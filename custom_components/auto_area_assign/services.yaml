@@ -1,0 +1,8 @@
+refresh:
+  name: Refresh auto area assignment
+  description: >
+    Manually triggers the area assignment process.
+    Scans all entities and assigns areas to devices/entities
+    based on entity name prefixes matching area names or aliases.
+  fields: {}
+
