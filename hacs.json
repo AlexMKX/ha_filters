@@ -1,7 +1,7 @@
 {
-  "name": "Auto Area Assign",
+  "name": "Home Assistant Filters",
   "content_in_root": false,
   "render_readme": true,
-  "domains": ["auto_area_assign"],
+  "domains": ["auto_area_assign", "climate_sync"],
   "country": "global"
 }

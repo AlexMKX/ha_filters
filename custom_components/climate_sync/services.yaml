@@ -1,0 +1,4 @@
+refresh:
+  name: Refresh
+  description: Manually trigger synchronization of all TRVZB devices with area temperature sensors
+

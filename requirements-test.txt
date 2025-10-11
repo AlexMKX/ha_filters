@@ -1,2 +1,0 @@
-homeassistant==2024.12.5
-pytest==8.4.1

@@ -9,3 +9,5 @@ pytest_cache/
 .homeassistant/
 .DS_Store
 tests/ha_config
+.credentials
+venv/
