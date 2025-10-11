@@ -21,6 +21,7 @@ Synchronizes external temperature sensors with TRVZB (thermostatic radiator valv
 - Automatically assigns areas to **devices** with matching entity prefixes
 - Automatically assigns areas to **standalone entities** (entities without devices)
 - Ignores entities and devices with the `auto_area_ignore` label
+- Hides entities of devices with the `system` label (configurable)
 - Safely handles cases where devices or entities already have an assigned area
 - Manual refresh via Home Assistant service
 
@@ -43,6 +44,23 @@ You can exclude entities or devices from automatic assignment by adding the **`a
 2. **For devices**: navigate to the device settings and add the `auto_area_ignore` label
 
 All entities linked to a device with the `auto_area_ignore` label will also be ignored.
+
+### Hiding System Device Entities
+The integration can automatically hide all entities of devices marked with the **`system`** label. This is useful for infrastructure devices (routers, bridges, etc.) that you want to keep in Home Assistant but don't need to see in the UI.
+
+To enable/disable this feature, add to your `configuration.yaml`:
+```yaml
+auto_area_assign:
+  hide_system_entities: true  # default: true
+```
+
+To mark a device as a system device:
+1. Navigate to Settings → Devices & Services → Devices
+2. Open the device you want to hide
+3. Add the `system` label to the device
+4. Run `auto_area_assign.refresh` service or restart Home Assistant
+
+All entities of devices with the `system` label will be automatically hidden.
 
 ---
 
@@ -104,3 +122,4 @@ Use the `climate_sync.refresh` service to manually trigger:
 [custom_components.climate_sync] Syncing f1-kitchen-trv: 24.7°C -> 24.6°C
 ```
 
+    

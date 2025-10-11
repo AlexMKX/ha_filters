@@ -14,6 +14,8 @@ from homeassistant.util import slugify
 DOMAIN = "auto_area_assign"
 SERVICE_REFRESH = "refresh"
 LABEL_IGNORE = "auto_area_ignore"
+LABEL_SYSTEM = "system"
+CONF_HIDE_SYSTEM_ENTITIES = "hide_system_entities"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -27,6 +29,14 @@ class AliasMapping:
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the Auto Area Assign integration."""
+    
+    # Get config for this domain
+    domain_config = config.get(DOMAIN, {})
+    hide_system_entities = domain_config.get(CONF_HIDE_SYSTEM_ENTITIES, True)
+    
+    # Store config in hass.data
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][CONF_HIDE_SYSTEM_ENTITIES] = hide_system_entities
 
     async def _handle_refresh_service(call: ServiceCall) -> None:
         await _async_assign_areas(hass)
@@ -139,6 +149,72 @@ async def _async_assign_areas(hass: HomeAssistant) -> None:
         skipped_existing_area,
         skipped_ignored,
     )
+    
+    # Hide entities of devices with "system" label
+    hide_system_entities = hass.data.get(DOMAIN, {}).get(CONF_HIDE_SYSTEM_ENTITIES, True)
+    if hide_system_entities:
+        hidden_entities_count = await _async_hide_system_device_entities(
+            hass, device_registry, entity_registry
+        )
+        _LOGGER.info(
+            "System device entities hidden: %s entities", hidden_entities_count
+        )
+
+
+async def _async_hide_system_device_entities(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> int:
+    """Hide all entities of devices with 'system' label."""
+    hidden_count = 0
+    
+    # Find all devices with "system" label
+    system_devices = [
+        device for device in device_registry.devices.values()
+        if LABEL_SYSTEM in device.labels
+    ]
+    
+    if not system_devices:
+        _LOGGER.debug("No devices with 'system' label found")
+        return 0
+    
+    _LOGGER.info("Found %s devices with 'system' label", len(system_devices))
+    
+    # Hide all entities of these devices
+    for device in system_devices:
+        device_entities = er.async_entries_for_device(
+            entity_registry, device.id, include_disabled_entities=True
+        )
+        
+        for entity in device_entities:
+            # Check if entity is already hidden
+            if entity.hidden_by == er.RegistryEntryHider.USER:
+                _LOGGER.debug(
+                    "Entity %s is already hidden by user, skipping", entity.entity_id
+                )
+                continue
+            
+            if entity.hidden_by == er.RegistryEntryHider.INTEGRATION:
+                _LOGGER.debug(
+                    "Entity %s is already hidden by integration", entity.entity_id
+                )
+                continue
+                
+            # Hide the entity
+            entity_registry.async_update_entity(
+                entity.entity_id,
+                hidden_by=er.RegistryEntryHider.INTEGRATION
+            )
+            hidden_count += 1
+            _LOGGER.debug(
+                "Hidden entity %s (device: %s, name: %s)",
+                entity.entity_id,
+                device.id,
+                device.name or device.name_by_user or "unknown"
+            )
+    
+    return hidden_count
 
 
 def _build_alias_map(areas: Iterable[ar.AreaEntry]) -> List[AliasMapping]:
