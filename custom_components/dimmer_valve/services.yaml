@@ -1,0 +1,6 @@
+refresh:
+  name: Refresh
+  description: Manually refresh all dimmer valve entities.
+
+
+

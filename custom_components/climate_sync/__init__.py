@@ -252,32 +252,46 @@ class ClimateSync:
                 )
                 return
 
+            # Try to get current temperature, but don't fail if it's unknown
+            current_temp = None
+            skip_sync = False
+            
             try:
                 current_temp = float(current_state.state)
+                # Only skip update if temperature hasn't changed
+                if abs(current_temp - temperature) < 0.05:  # 0.05°C tolerance
+                    _LOGGER.debug(
+                        "Temperature for %s unchanged (%.1f°C), skipping",
+                        device.device_name,
+                        temperature,
+                    )
+                    device.last_sync = dt_util.utcnow()
+                    skip_sync = True
             except (ValueError, TypeError):
-                _LOGGER.warning(
-                    "Invalid current temperature for %s: %s",
+                # Current temperature is unknown/unavailable - we should sync anyway
+                _LOGGER.info(
+                    "Current temperature for %s is %s, will sync to %.1f°C",
                     device.device_name,
                     current_state.state,
+                    temperature,
                 )
+            
+            if skip_sync:
                 return
 
-            # Only update if temperature changed
-            if abs(current_temp - temperature) < 0.05:  # 0.05°C tolerance
-                _LOGGER.debug(
-                    "Temperature for %s unchanged (%.1f°C), skipping",
+            if current_temp is not None:
+                _LOGGER.info(
+                    "Syncing %s: %.1f°C -> %.1f°C",
+                    device.device_name,
+                    current_temp,
+                    temperature,
+                )
+            else:
+                _LOGGER.info(
+                    "Syncing %s: unknown -> %.1f°C",
                     device.device_name,
                     temperature,
                 )
-                device.last_sync = dt_util.utcnow()
-                return
-
-            _LOGGER.info(
-                "Syncing %s: %.1f°C -> %.1f°C",
-                device.device_name,
-                current_temp,
-                temperature,
-            )
 
             await self.hass.services.async_call(
                 "number",

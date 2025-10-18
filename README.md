@@ -12,6 +12,10 @@ Automatically assigns areas to devices and entities based on their `object_id` p
 
 Synchronizes external temperature sensors with TRVZB (thermostatic radiator valve) devices, enabling precise climate control using room temperature sensors instead of internal TRV sensors.
 
+### Dimmer Valve
+
+Converts light dimmers into valve entities with bidirectional synchronization, supporting normally-open and normally-closed valve types.
+
 ---
 
 ## Auto Area Assign
@@ -120,6 +124,66 @@ Use the `climate_sync.refresh` service to manually trigger:
 [custom_components.climate_sync] Registered TRVZB device f1-kitchen-trv in area Kitchen
 [custom_components.climate_sync] Setup listener for sensor.kitchen_temperature covering 1 TRVZB devices
 [custom_components.climate_sync] Syncing f1-kitchen-trv: 24.7°C -> 24.6°C
+```
+
+---
+
+## Dimmer Valve
+
+### Features
+- Converts light dimmers to valve entities for thermostatic valve control
+- Bidirectional synchronization (dimmer ↔ valve)
+- Support for normally-open (NO) and normally-closed (NC) valve types
+- Automatic hiding of source light entities
+- Position restoration after restart
+- Real-time state updates
+
+### How It Works
+The component creates valve entities from light dimmers, where brightness controls valve position:
+
+**Normally Open (NO):**
+- 100% light brightness = 0% valve position (fully closed)
+- 0% light brightness = 100% valve position (fully open)
+
+**Normally Closed (NC):**
+- 100% light brightness = 100% valve position (fully open)
+- 0% light brightness = 0% valve position (fully closed)
+
+### Installation
+1. Copy the `custom_components/dimmer_valve` directory to your Home Assistant's `custom_components` directory
+2. Add configuration to your `configuration.yaml`
+3. Restart Home Assistant
+
+### Configuration
+```yaml
+dimmer_valve:
+  light.mast_valve_l1: normally_open
+  light.another_valve: normally_closed
+```
+
+**Configuration Options:**
+- `normally_open` - For valves that close when powered (100% brightness = closed)
+- `normally_closed` - For valves that open when powered (100% brightness = open)
+
+**Important:** Only `light` domain entities are supported. Other domains will cause an error.
+
+### Usage
+After configuration, valve entities are automatically created with the same name as the source light:
+- `light.mast_valve_l1` → `valve.mast_valve_l1`
+
+The valve entities support all standard valve operations:
+- `valve.open_valve` - Fully open the valve
+- `valve.close_valve` - Fully close the valve
+- `valve.set_valve_position` - Set specific position (0-100%)
+
+The source light entities are automatically hidden but remain functional.
+
+### Example Logs
+```
+[custom_components.dimmer_valve] Dimmer Valve configuration loaded with 2 dimmers
+[custom_components.dimmer_valve.valve] Created valve valve.ceiling_lights from dimmer light.ceiling_lights (type: normally_open)
+[custom_components.dimmer_valve.valve] Updated valve.ceiling_lights from dimmer: brightness=180 -> position=30%
+[custom_components.dimmer_valve] Hidden light entity light.ceiling_lights
 ```
 
     

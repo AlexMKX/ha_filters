@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## climate_sync 0.1.1 - 2025-10-18
+
+### Fixed
+- Fixed issue where TRVZB devices with "unknown" temperature state were not being synchronized with area temperature sensors. Now the component will push the correct temperature even when the current device state is unknown or unavailable.
+
 ## [0.2.1] - 2025-10-10
 
 ### Fixed
