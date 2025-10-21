@@ -23,6 +23,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # Interval for periodic forced sync
 SYNC_INTERVAL = timedelta(minutes=10)
+# Temperature tolerance - minimum difference to trigger sync
+TEMPERATURE_TOLERANCE = 0.5  # °C
 
 
 @dataclass
@@ -34,6 +36,7 @@ class TRVZBDevice:
     area_id: str
     select_entity_id: str  # select.xxx_temperature_sensor_select
     number_entity_id: str  # number.xxx_external_temperature_input
+    climate_entity_id: str | None = None  # climate.xxx entity
     last_sync: datetime | None = None
 
 
@@ -100,10 +103,15 @@ class ClimateSync:
                 # Find required entities for this device
                 select_entity = None
                 number_entity = None
+                climate_entity = None
 
                 for entity in entity_registry.entities.values():
                     if entity.device_id != device.id:
                         continue
+
+                    # Look for climate entity
+                    if entity.domain == "climate":
+                        climate_entity = entity.entity_id
 
                     # Look for temperature_sensor_select entity
                     if (
@@ -134,15 +142,17 @@ class ClimateSync:
                     area_id=area.id,
                     select_entity_id=select_entity,
                     number_entity_id=number_entity,
+                    climate_entity_id=climate_entity,
                 )
 
                 self.devices[device.id] = trv_device
                 discovered_count += 1
 
                 _LOGGER.info(
-                    "Registered TRVZB device %s in area %s (select: %s, number: %s)",
+                    "Registered TRVZB device %s in area %s (climate: %s, select: %s, number: %s)",
                     device.name,
                     area.name,
+                    climate_entity,
                     select_entity,
                     number_entity,
                 )
@@ -154,7 +164,15 @@ class ClimateSync:
         for device in self.devices.values():
             try:
                 current_state = self.hass.states.get(device.select_entity_id)
-                if current_state and current_state.state != "external":
+                if not current_state:
+                    _LOGGER.warning(
+                        "Select entity %s not ready yet for %s, will set external mode on first update",
+                        device.select_entity_id,
+                        device.device_name,
+                    )
+                    continue
+                
+                if current_state.state != "external":
                     _LOGGER.info(
                         "Setting %s to external mode (was: %s)",
                         device.device_name,
@@ -181,70 +199,102 @@ class ClimateSync:
                 )
 
     async def async_setup_listeners(self) -> None:
-        """Set up state change listeners for area temperature sensors."""
-        area_registry = ar.async_get(self.hass)
-
-        # Group devices by area
-        area_devices: dict[str, list[TRVZBDevice]] = {}
+        """Set up state change listeners for TRV entities."""
+        # Setup listener for each TRV device to react to its own state changes
         for device in self.devices.values():
-            area_devices.setdefault(device.area_id, []).append(device)
-
-        # Setup listener for each area's temperature sensor
-        for area_id, devices in area_devices.items():
-            area = area_registry.async_get_area(area_id)
-            if not area or not hasattr(area, 'temperature_entity_id') or not area.temperature_entity_id:
-                continue
-
-            temp_sensor_id = area.temperature_entity_id
+            # Collect all entity IDs for this device
+            entity_ids = [device.select_entity_id, device.number_entity_id]
+            if device.climate_entity_id:
+                entity_ids.append(device.climate_entity_id)
 
             @callback
-            def _make_listener(area_id: str, devices: list[TRVZBDevice]):
-                """Create a listener for specific area."""
+            def _make_listener(device: TRVZBDevice):
+                """Create a listener for specific TRV device."""
                 
-                async def _async_temp_changed(event: Event) -> None:
-                    """Handle temperature sensor state change."""
-                    new_state = event.data.get("new_state")
-                    if not new_state or new_state.state in ("unknown", "unavailable"):
-                        return
+                async def _async_trv_state_changed(event: Event) -> None:
+                    """Handle TRV entity state change."""
+                    # Always check and enforce external mode on any select entity update
+                    if event.data.get("entity_id") == device.select_entity_id:
+                        select_state = event.data.get("new_state")
+                        if select_state and select_state.state != "external":
+                            try:
+                                _LOGGER.info(
+                                    "Setting %s to external mode (was: %s)",
+                                    device.device_name,
+                                    select_state.state,
+                                )
+                                await self.hass.services.async_call(
+                                    "select",
+                                    "select_option",
+                                    {
+                                        "entity_id": device.select_entity_id,
+                                        "option": "external",
+                                    },
+                                    blocking=True,
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "Failed to set external mode for %s: %s",
+                                    device.device_name,
+                                    e,
+                                )
+                    
+                    _LOGGER.debug(
+                        "TRV entity state changed for %s, triggering sync check",
+                        device.device_name,
+                    )
+                    await self._async_sync_device(device)
 
-                    try:
-                        temperature = float(new_state.state)
-                        _LOGGER.debug(
-                            "Temperature changed in area to %.1f°C, syncing %d devices",
-                            temperature,
-                            len(devices),
-                        )
-                        for device in devices:
-                            await self._async_sync_device(device, temperature)
-                    except (ValueError, TypeError) as e:
-                        _LOGGER.warning(
-                            "Invalid temperature value %s: %s",
-                            new_state.state,
-                            e,
-                        )
-
-                return _async_temp_changed
+                return _async_trv_state_changed
 
             listener = async_track_state_change_event(
                 self.hass,
-                [temp_sensor_id],
-                _make_listener(area_id, devices),
+                entity_ids,
+                _make_listener(device),
             )
 
-            self.area_listeners[area_id] = listener
+            self.area_listeners[device.device_id] = listener
 
             _LOGGER.info(
-                "Setup listener for %s covering %d TRVZB devices",
-                temp_sensor_id,
-                len(devices),
+                "Setup listener for TRV %s monitoring entities: %s",
+                device.device_name,
+                ", ".join(entity_ids),
             )
 
-    async def _async_sync_device(
-        self, device: TRVZBDevice, temperature: float
-    ) -> None:
+    async def _async_sync_device(self, device: TRVZBDevice) -> None:
         """Sync temperature to a single TRVZB device."""
         try:
-            # Get current external temperature input value
+            # Get area temperature sensor
+            area_registry = ar.async_get(self.hass)
+            area = area_registry.async_get_area(device.area_id)
+            if not area or not hasattr(area, 'temperature_entity_id') or not area.temperature_entity_id:
+                _LOGGER.debug(
+                    "Area for device %s has no temperature sensor",
+                    device.device_name,
+                )
+                return
+
+            # Get target temperature from area sensor
+            temp_state = self.hass.states.get(area.temperature_entity_id)
+            if not temp_state or temp_state.state in ("unknown", "unavailable"):
+                _LOGGER.debug(
+                    "Area temperature for %s is %s, skipping sync",
+                    device.device_name,
+                    temp_state.state if temp_state else "unknown",
+                )
+                return
+
+            try:
+                target_temperature = float(temp_state.state)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid area temperature value for %s: %s",
+                    device.device_name,
+                    temp_state.state,
+                )
+                return
+
+            # Get current external temperature input value from TRV
             current_state = self.hass.states.get(device.number_entity_id)
             if not current_state:
                 _LOGGER.warning(
@@ -252,45 +302,60 @@ class ClimateSync:
                 )
                 return
 
-            # Try to get current temperature, but don't fail if it's unknown
+            # Check tolerance
             current_temp = None
-            skip_sync = False
+            should_sync = False
             
-            try:
-                current_temp = float(current_state.state)
-                # Only skip update if temperature hasn't changed
-                if abs(current_temp - temperature) < 0.05:  # 0.05°C tolerance
-                    _LOGGER.debug(
-                        "Temperature for %s unchanged (%.1f°C), skipping",
-                        device.device_name,
-                        temperature,
-                    )
-                    device.last_sync = dt_util.utcnow()
-                    skip_sync = True
-            except (ValueError, TypeError):
-                # Current temperature is unknown/unavailable - we should sync anyway
+            if current_state.state in ("unknown", "unavailable"):
+                # TRV value is unknown/unavailable - we should sync
                 _LOGGER.info(
                     "Current temperature for %s is %s, will sync to %.1f°C",
                     device.device_name,
                     current_state.state,
-                    temperature,
+                    target_temperature,
                 )
+                should_sync = True
+            else:
+                try:
+                    current_temp = float(current_state.state)
+                    # Check if difference exceeds tolerance
+                    if abs(current_temp - target_temperature) >= TEMPERATURE_TOLERANCE:
+                        should_sync = True
+                    else:
+                        _LOGGER.debug(
+                            "Temperature for %s within tolerance (%.1f°C vs %.1f°C), skipping",
+                            device.device_name,
+                            current_temp,
+                            target_temperature,
+                        )
+                        device.last_sync = dt_util.utcnow()
+                except (ValueError, TypeError):
+                    # Invalid value in TRV - sync anyway
+                    _LOGGER.info(
+                        "Invalid current temperature for %s: %s, will sync to %.1f°C",
+                        device.device_name,
+                        current_state.state,
+                        target_temperature,
+                    )
+                    should_sync = True
             
-            if skip_sync:
+            if not should_sync:
                 return
 
             if current_temp is not None:
                 _LOGGER.info(
-                    "Syncing %s: %.1f°C -> %.1f°C",
+                    "Syncing %s: %.1f°C -> %.1f°C (diff: %.1f°C)",
                     device.device_name,
                     current_temp,
-                    temperature,
+                    target_temperature,
+                    abs(current_temp - target_temperature),
                 )
             else:
                 _LOGGER.info(
-                    "Syncing %s: unknown -> %.1f°C",
+                    "Syncing %s: %s -> %.1f°C",
                     device.device_name,
-                    temperature,
+                    current_state.state,
+                    target_temperature,
                 )
 
             await self.hass.services.async_call(
@@ -298,12 +363,12 @@ class ClimateSync:
                 "set_value",
                 {
                     "entity_id": device.number_entity_id,
-                    "value": temperature,
+                    "value": target_temperature,
                 },
                 blocking=True,
             )
 
-            device.last_sync = datetime.now()
+            device.last_sync = dt_util.utcnow()
 
         except Exception as e:
             _LOGGER.error(
@@ -314,34 +379,17 @@ class ClimateSync:
 
     async def _async_periodic_sync(self, now: datetime) -> None:
         """Periodically sync devices that haven't been updated recently."""
-        area_registry = ar.async_get(self.hass)
-        
         for device in self.devices.values():
             # Skip if recently synced
             if device.last_sync and (now - device.last_sync) < SYNC_INTERVAL:
                 continue
 
-            # Get area temperature sensor
-            area = area_registry.async_get_area(device.area_id)
-            if not area or not hasattr(area, 'temperature_entity_id') or not area.temperature_entity_id:
-                continue
-
-            temp_state = self.hass.states.get(area.temperature_entity_id)
-            if not temp_state or temp_state.state in ("unknown", "unavailable"):
-                continue
-
-            try:
-                temperature = float(temp_state.state)
-                _LOGGER.debug(
-                    "Periodic sync for %s (last sync: %s)",
-                    device.device_name,
-                    device.last_sync,
-                )
-                await self._async_sync_device(device, temperature)
-            except (ValueError, TypeError) as e:
-                _LOGGER.warning(
-                    "Invalid temperature for periodic sync: %s", e
-                )
+            _LOGGER.debug(
+                "Periodic sync for %s (last sync: %s)",
+                device.device_name,
+                device.last_sync,
+            )
+            await self._async_sync_device(device)
 
     async def async_refresh(self) -> None:
         """Manually refresh all devices."""
