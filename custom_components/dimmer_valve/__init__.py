@@ -25,12 +25,34 @@ VALVE_TYPE_NORMALLY_CLOSED = "normally_closed"
 
 VALVE_TYPES = [VALVE_TYPE_NORMALLY_OPEN, VALVE_TYPE_NORMALLY_CLOSED]
 
+# Valve type shortcuts
+VALVE_TYPE_SHORTCUTS = {
+    "no": VALVE_TYPE_NORMALLY_OPEN,
+    "nc": VALVE_TYPE_NORMALLY_CLOSED,
+}
+
+# Default max brightness
+DEFAULT_MAX_BRIGHTNESS = 255
+
+# Configuration schema for a single valve
+VALVE_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Required("type"): vol.All(
+            str,  # Ensure it's a string first
+            vol.In(VALVE_TYPES + list(VALVE_TYPE_SHORTCUTS.keys())),
+        ),
+        vol.Optional("max", default=DEFAULT_MAX_BRIGHTNESS): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=255)
+        ),
+    }
+)
+
 # Configuration schema
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
             {
-                cv.entity_id: vol.In(VALVE_TYPES),
+                cv.entity_id: VALVE_CONFIG_SCHEMA,
             }
         )
     },
@@ -48,29 +70,47 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass.data[DOMAIN] = {}
         return True
 
-    # Validate that all entity_ids are lights
-    for entity_id, valve_type in domain_config.items():
+    # Validate that all entity_ids are lights and normalize configuration
+    normalized_config = {}
+    for entity_id, valve_config in domain_config.items():
         if not entity_id.startswith("light."):
             _LOGGER.error(
                 "Invalid entity_id '%s': only 'light' domain is allowed", entity_id
             )
             return False
 
+        # Normalize valve type (handle shortcuts)
+        valve_type = valve_config["type"]
+        if valve_type in VALVE_TYPE_SHORTCUTS:
+            valve_type = VALVE_TYPE_SHORTCUTS[valve_type]
+        
+        normalized_config[entity_id] = {
+            "type": valve_type,
+            "max": valve_config.get("max", DEFAULT_MAX_BRIGHTNESS),
+        }
+        
+        _LOGGER.debug(
+            "Normalized config for %s: type=%s, max=%d",
+            entity_id,
+            valve_type,
+            normalized_config[entity_id]["max"],
+        )
+
     # Store configuration
     hass.data[DOMAIN] = {
-        "config": domain_config,
+        "config": normalized_config,
         "valves": {},
     }
 
     _LOGGER.info(
-        "Dimmer Valve configuration loaded with %d dimmers", len(domain_config)
+        "Dimmer Valve configuration loaded with %d dimmers", len(normalized_config)
     )
 
     # Load valve platform using async_forward_entry_setup
     from homeassistant.helpers import discovery
     hass.async_create_task(
         discovery.async_load_platform(
-            hass, Platform.VALVE, DOMAIN, domain_config, config
+            hass, Platform.VALVE, DOMAIN, normalized_config, config
         )
     )
 
@@ -86,7 +126,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Hide source light entities after a delay to ensure they are created
     async def _hide_lights_delayed():
         await asyncio.sleep(5)
-        await _async_hide_light_entities(hass, domain_config.keys())
+        await _async_hide_light_entities(hass, normalized_config.keys())
 
     hass.async_create_task(_hide_lights_delayed())
 

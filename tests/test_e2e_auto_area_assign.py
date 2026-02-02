@@ -36,6 +36,7 @@ async def _hass_environment(tmp_path):
         version=1,
         minor_version=1,
         discovery_keys=MappingProxyType({}),
+        subentries_data=(),
         unique_id=None,
         entry_id="test-entry",
         pref_disable_new_entities=None,

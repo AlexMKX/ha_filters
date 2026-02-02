@@ -3,6 +3,7 @@ import asyncio
 
 import sys
 import types
+import importlib.util
 from dataclasses import dataclass
 
 import pytest
@@ -46,17 +47,18 @@ area_registry.async_get = lambda hass: None
 device_registry.async_get = lambda hass: None
 entity_registry.async_get = lambda hass: None
 
-sys.modules.setdefault("homeassistant", homeassistant)
-sys.modules.setdefault("homeassistant.core", core)
-sys.modules.setdefault("homeassistant.const", const)
-sys.modules.setdefault("homeassistant.helpers", helpers)
-sys.modules.setdefault("homeassistant.helpers.area_registry", area_registry)
-sys.modules.setdefault("homeassistant.helpers.device_registry", device_registry)
-sys.modules.setdefault("homeassistant.helpers.entity_registry", entity_registry)
-sys.modules.setdefault("homeassistant.util", util)
+if importlib.util.find_spec("homeassistant") is None:
+    sys.modules.setdefault("homeassistant", homeassistant)
+    sys.modules.setdefault("homeassistant.core", core)
+    sys.modules.setdefault("homeassistant.const", const)
+    sys.modules.setdefault("homeassistant.helpers", helpers)
+    sys.modules.setdefault("homeassistant.helpers.area_registry", area_registry)
+    sys.modules.setdefault("homeassistant.helpers.device_registry", device_registry)
+    sys.modules.setdefault("homeassistant.helpers.entity_registry", entity_registry)
+    sys.modules.setdefault("homeassistant.util", util)
 
 
-from custom_components.auto_area_assign import _async_assign_areas  # noqa: E402
+import custom_components.auto_area_assign as aaa  # noqa: E402
 
 
 @dataclass
@@ -124,14 +126,15 @@ class EntityRegistryStub:
 
 
 class HassStub(HomeAssistant):
-    pass
+    def __init__(self) -> None:
+        self.data = {aaa.DOMAIN: {aaa.CONF_HIDE_SYSTEM_ENTITIES: False}}
 
 
 def run_assignment(hass, area_reg, device_reg, entity_reg, monkeypatch):
-    monkeypatch.setattr(area_registry, "async_get", lambda hass: area_reg)
-    monkeypatch.setattr(device_registry, "async_get", lambda hass: device_reg)
-    monkeypatch.setattr(entity_registry, "async_get", lambda hass: entity_reg)
-    asyncio.run(_async_assign_areas(hass))
+    monkeypatch.setattr(aaa.ar, "async_get", lambda hass: area_reg)
+    monkeypatch.setattr(aaa.dr, "async_get", lambda hass: device_reg)
+    monkeypatch.setattr(aaa.er, "async_get", lambda hass: entity_reg)
+    asyncio.run(aaa._async_assign_areas(hass))
 
 
 def test_assigns_area_when_device_missing_area(monkeypatch):

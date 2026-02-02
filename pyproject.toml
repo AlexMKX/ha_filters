@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = [
+  "tests",
+  "custom_components/automation_run_switch/tests",
+]
+python_files = ["test_*.py"]

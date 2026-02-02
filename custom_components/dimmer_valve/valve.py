@@ -34,7 +34,7 @@ async def async_setup_platform(
         return
 
     entities = []
-    for dimmer_entity_id, valve_type in discovery_info.items():
+    for dimmer_entity_id, valve_config in discovery_info.items():
         # Create valve entity_id from dimmer entity_id
         # light.mast_valve_l1 -> valve.mast_valve_l1
         valve_entity_id = dimmer_entity_id.replace("light.", "valve.", 1)
@@ -43,14 +43,16 @@ async def async_setup_platform(
             hass=hass,
             dimmer_entity_id=dimmer_entity_id,
             valve_entity_id=valve_entity_id,
-            valve_type=valve_type,
+            valve_type=valve_config["type"],
+            max_brightness=valve_config["max"],
         )
         entities.append(entity)
         _LOGGER.info(
-            "Created valve %s from dimmer %s (type: %s)",
+            "Created valve %s from dimmer %s (type: %s, max: %d)",
             valve_entity_id,
             dimmer_entity_id,
-            valve_type,
+            valve_config["type"],
+            valve_config["max"],
         )
 
     async_add_entities(entities, True)
@@ -73,27 +75,31 @@ class DimmerValve(ValveEntity, RestoreEntity):
         dimmer_entity_id: str,
         valve_entity_id: str,
         valve_type: str,
+        max_brightness: int = 255,
     ) -> None:
         """Initialize the Dimmer Valve."""
         self.hass = hass
         self._dimmer_entity_id = dimmer_entity_id
         self._valve_type = valve_type
+        self._max_brightness = max_brightness
         self._attr_unique_id = f"dimmer_valve_{dimmer_entity_id}"
         self._attr_name = valve_entity_id.replace("valve.", "").replace("_", " ").title()
         self.entity_id = valve_entity_id
 
         # Internal state
         self._current_position: int | None = None
+        self._position_raw: int = 0  # Raw position (0-255)
         self._is_closed: bool | None = None
         self._dimmer_listener = None
         self._updating_from_dimmer = False
         self._updating_from_valve = False
 
         _LOGGER.debug(
-            "Initialized DimmerValve: %s (dimmer: %s, type: %s)",
+            "Initialized DimmerValve: %s (dimmer: %s, type: %s, max: %d)",
             valve_entity_id,
             dimmer_entity_id,
             valve_type,
+            max_brightness,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -109,11 +115,19 @@ class DimmerValve(ValveEntity, RestoreEntity):
             self._is_closed = last_state.state == "closed"
             if last_state.attributes.get("current_position") is not None:
                 self._current_position = int(last_state.attributes["current_position"])
+            
+            # Restore position_raw if available, otherwise calculate from position
+            if last_state.attributes.get("position_raw") is not None:
+                self._position_raw = int(last_state.attributes["position_raw"])
+            elif self._current_position is not None:
+                self._position_raw = self._position_to_raw(self._current_position)
+            
             _LOGGER.debug(
-                "Restored state for %s: closed=%s, position=%s",
+                "Restored state for %s: closed=%s, position=%s, raw=%s",
                 self.entity_id,
                 self._is_closed,
                 self._current_position,
+                self._position_raw,
             )
 
         # Get initial state from dimmer
@@ -161,31 +175,43 @@ class DimmerValve(ValveEntity, RestoreEntity):
         """Return if the valve is opening."""
         return False
 
-    def _dimmer_brightness_to_valve_position(self, brightness: int) -> int:
-        """Convert dimmer brightness (0-255) to valve position (0-100)."""
-        # Convert brightness from 0-255 to 0-100
-        brightness_percent = int((brightness / 255) * 100)
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return entity specific state attributes."""
+        return {
+            "position_raw": self._position_raw,
+            "max_brightness": self._max_brightness,
+        }
 
+    def _position_to_raw(self, position: int) -> int:
+        """Convert valve position (0-100%) to raw position (0-255)."""
+        return round(position * 255 / 100)
+
+    def _raw_to_position(self, raw: int) -> int:
+        """Convert raw position (0-255) to valve position (0-100%)."""
+        return round(raw * 100 / 255)
+
+    def _raw_to_brightness(self, raw: int) -> int:
+        """Convert raw position (0-255) to dimmer brightness (0-max)."""
+        # First scale from 0-255 to 0-max
+        brightness = round(raw * self._max_brightness / 255)
+        
         # Apply valve type transformation
         if self._valve_type == VALVE_TYPE_NORMALLY_OPEN:
-            # NO: 100% brightness = 0% valve position (closed)
-            return 100 - brightness_percent
-        else:
-            # NC: 100% brightness = 100% valve position (open)
-            return brightness_percent
+            # NO: high raw = low brightness (inverted)
+            brightness = self._max_brightness - brightness
+        
+        return brightness
 
-    def _valve_position_to_dimmer_brightness(self, position: int) -> int:
-        """Convert valve position (0-100) to dimmer brightness (0-255)."""
-        # Apply valve type transformation
+    def _brightness_to_raw(self, brightness: int) -> int:
+        """Convert dimmer brightness (0-max) to raw position (0-255)."""
+        # Apply valve type transformation first
         if self._valve_type == VALVE_TYPE_NORMALLY_OPEN:
-            # NO: 0% valve position = 100% brightness (closed)
-            brightness_percent = 100 - position
-        else:
-            # NC: 100% valve position = 100% brightness (open)
-            brightness_percent = position
-
-        # Convert from 0-100 to 0-255
-        return int((brightness_percent / 100) * 255)
+            # NO: invert brightness
+            brightness = self._max_brightness - brightness
+        
+        # Scale from 0-max to 0-255
+        return round(brightness * 255 / self._max_brightness)
 
     async def _async_update_from_dimmer(self) -> None:
         """Update valve state from dimmer state."""
@@ -209,18 +235,23 @@ class DimmerValve(ValveEntity, RestoreEntity):
             if dimmer_state.state == "off":
                 brightness = 0
 
-            # Convert to valve position
-            new_position = self._dimmer_brightness_to_valve_position(brightness)
+            # Convert to raw position and then to valve position
+            new_raw = self._brightness_to_raw(brightness)
+            new_position = self._raw_to_position(new_raw)
+            
             old_position = self._current_position
+            old_raw = self._position_raw
 
-            if new_position != old_position:
+            if new_position != old_position or new_raw != old_raw:
+                self._position_raw = new_raw
                 self._current_position = new_position
                 self._is_closed = new_position == 0
                 self.async_write_ha_state()
                 _LOGGER.debug(
-                    "Updated %s from dimmer: brightness=%d -> position=%d%%",
+                    "Updated %s from dimmer: brightness=%d -> raw=%d -> position=%d%%",
                     self.entity_id,
                     brightness,
+                    new_raw,
                     new_position,
                 )
         finally:
@@ -234,12 +265,15 @@ class DimmerValve(ValveEntity, RestoreEntity):
 
         self._updating_from_valve = True
         try:
-            brightness = self._valve_position_to_dimmer_brightness(target_position)
+            # Convert position to raw, then to brightness
+            raw = self._position_to_raw(target_position)
+            brightness = self._raw_to_brightness(raw)
 
             _LOGGER.debug(
-                "Updating dimmer %s: position=%d%% -> brightness=%d",
+                "Updating dimmer %s: position=%d%% -> raw=%d -> brightness=%d",
                 self._dimmer_entity_id,
                 target_position,
+                raw,
                 brightness,
             )
 
@@ -263,6 +297,7 @@ class DimmerValve(ValveEntity, RestoreEntity):
                 )
 
             # Update internal state
+            self._position_raw = raw
             self._current_position = target_position
             self._is_closed = target_position == 0
             self.async_write_ha_state()
